@@ -1,0 +1,63 @@
+flowchart TB
+  classDef source fill:#eef2ff,stroke:#4f46e5,color:#1e1b4b
+  classDef airflow fill:#eff6ff,stroke:#2563eb,color:#172554
+  classDef dbt fill:#fff7ed,stroke:#f97316,color:#431407
+  classDef snow fill:#ecfeff,stroke:#0891b2,color:#164e63
+  classDef test fill:#fdf4ff,stroke:#c026d3,color:#4a044e
+  classDef config fill:#f8fafc,stroke:#64748b,color:#0f172a,stroke-dasharray: 7 5
+
+  subgraph development[Development and runtime packaging]
+    canonical[data_pipeline/\nStandalone dbt source copy]:::source
+    deployed[dbt-dag/dags/dbt/data_pipeline/\nCopy executed by Airflow]:::source
+    astro[Astro Runtime 3.2-4 image\nAirflow + Cosmos + Snowflake provider]:::airflow
+    venv[dbt_venv\ndbt-snowflake executable]:::dbt
+    canonical -. manual synchronization .-> deployed
+    deployed --> astro
+    astro --> venv
+  end
+
+  schedule[@daily\ncatchup false]:::airflow --> cosmos[Airflow dbt_dag\nAstronomer Cosmos DbtDag]:::airflow
+  conn[Airflow connection: snowflake_conn\naccount / user / password / role / warehouse]:::config --> cosmos
+  deployed --> cosmos
+  venv --> cosmos
+  cosmos --> deps[Install dbt dependencies\ndbt_utils 1.1.1]:::dbt
+  deps --> graph[Parse dbt graph and execute\nmodels + tests in dependency order]:::dbt
+
+  subgraph snowflake[Snowflake data transformation]
+    orders[(SNOWFLAKE_SAMPLE_DATA\nTPCH_SF1.ORDERS)]:::snow
+    lineitem[(SNOWFLAKE_SAMPLE_DATA\nTPCH_SF1.LINEITEM)]:::snow
+    stgOrders[stg_tpch_orders\nVIEW]:::dbt
+    stgLines[stg_tpch_line_items\nVIEW + surrogate item key]:::dbt
+    items[int_order_items\nTABLE + discounted_amount macro]:::dbt
+    summary[int_order_items_summary\nTABLE grouped by order]:::dbt
+    fact[fct_orders\nTABLE / final order facts]:::dbt
+    orders --> stgOrders
+    lineitem --> stgLines
+    stgOrders --> items
+    stgLines --> items
+    items --> summary
+    stgOrders --> fact
+    summary --> fact
+  end
+
+  graph --> stgOrders
+  graph --> stgLines
+
+  subgraph quality[dbt data quality tests]
+    sourceTests[Source tests\norders key unique + non-null\nlineitem → orders relationship]:::test
+    factTests[Fact generic tests\nkey unique + non-null\nrelationship warning\nstatus in P/O/F]:::test
+    singular[Singular tests\ndiscount amount must not be positive\ndate between 1990-01-01 and today]:::test
+  end
+  orders --> sourceTests
+  lineitem --> sourceTests
+  fact --> factTests
+  fact --> singular
+
+  target[(DBT_DB.DBT_SCHEMA\nwarehouse DBT_WH)]:::snow
+  stgOrders --> target
+  stgLines --> target
+  items --> target
+  summary --> target
+  fact --> target
+
+  example[Separate example_astronauts DAG\nOpen Notify API → dynamic mapped print tasks]:::config
